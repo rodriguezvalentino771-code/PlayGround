@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SUBSUELO — Demake homenaje 2D para navegador</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { background:#000; height:100%; font-family:"Courier New",monospace; color:#fff;
+    display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  #wrap { display:flex; flex-direction:column; align-items:center; gap:10px; }
+  #frame { border:4px solid #222; outline:2px solid #555; background:#000;
+    box-shadow:0 0 60px #000, 0 0 120px #111; image-rendering:pixelated; }
+  canvas { display:block; width:min(92vw, 960px); aspect-ratio:4/3; image-rendering:pixelated;
+    image-rendering:crisp-edges; background:#000; cursor:pointer; }
+  #hud { width:min(92vw,960px); display:flex; justify-content:space-between; align-items:center;
+    font-size:13px; color:#aaa; flex-wrap:wrap; gap:8px; }
+  #hud b { color:#fff; }
+  .keys span { border:1px solid #555; border-radius:4px; padding:1px 6px; color:#fff; background:#111; }
+  #note { font-size:12px; color:#666; max-width:min(92vw,960px); text-align:center; line-height:1.5; }
+  #note a { color:#888; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="frame"><canvas id="game" width="640" height="480"></canvas></div>
+  <div id="hud">
+    <div><b>SUBSUELO</b> · demake homenaje no-oficial (PC · teclado)</div>
+    <div class="keys"><span>←↑↓→/WASD</span> moverse &nbsp;<span>Z/Enter</span> confirmar &nbsp;<span>X/Shift</span> cancelar &nbsp;<span>M</span> sonido</div>
+  </div>
+  <div id="note">Homenaje original inspirado en la fórmula de Undertale (Toby Fox). Sin assets ni música original — todo el código, sprites y sonidos son propios. Abre <b>index.html</b> o sírvelo con cualquier servidor estático.</div>
+</div>
+<script>
+"use strict";
+/* ============================================================
+   SUBSUELO — mini port/homenaje de la fórmula UNDERTALE p/ web
+   Overworld top-down + diálogos typewriter + batallas bullet-hell
+   con LUCHAR / ACTUAR / OBJETO / PIEDAD. 100% Canvas + WebAudio.
+   ============================================================ */
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const W = 640, H = 480;
+
+/* ---------- utils ---------- */
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const irnd=(a,b)=>Math.floor(rnd(a,b+1));
+const choice=a=>a[Math.floor(Math.random()*a.length)];
+function rr(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+
+/* ---------- audio (todo sintetizado) ---------- */
+const AudioSys = {
+  ctx:null, muted:false,
+  init(){ if(!this.ctx){ try{ this.ctx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+    if(this.ctx&&this.ctx.state==='suspended') this.ctx.resume(); },
+  beep(f=440,d=0.06,type='square',v=0.05){ if(this.muted||!this.ctx) return;
+    const t=this.ctx.currentTime,o=this.ctx.createOscillator(),g=this.ctx.createGain();
+    o.type=type;o.frequency.value=f;g.gain.setValueAtTime(v,t);g.gain.exponentialRampToValueAtTime(0.0001,t+d);
+    o.connect(g);g.connect(this.ctx.destination);o.start(t);o.stop(t+d); },
+  txt(){ this.beep(rnd(600,900),0.03,'square',0.025); },
+  confirm(){ this.beep(880,0.08,'square',0.06); setTimeout(()=>this.beep(1320,0.1,'square',0.05),60); },
+  hurt(){ this.beep(160,0.25,'sawtooth',0.09); },
+  heal(){ this.beep(523,0.1,'square',0.05); setTimeout(()=>this.beep(659,0.1,'square',0.05),90); setTimeout(()=>this.beep(784,0.15,'square',0.05),180); },
+  spare(){ [523,659,784,1046].forEach((f,i)=>setTimeout(()=>this.beep(f,0.12,'square',0.05),i*90)); },
+  encounter(){ this.beep(220,0.12,'sawtooth',0.07); setTimeout(()=>this.beep(330,0.15,'sawtooth',0.07),110); },
+  shoot(){ this.beep(1200,0.05,'square',0.03); }
+};
+
+/* ---------- input ---------- */
+const keys={};
+const pressed={};
+addEventListener('keydown',e=>{
+  AudioSys.init();
+  const k=e.key.toLowerCase();
+  if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k===' '?' ':k)) e.preventDefault();
+  if(k==='m'){ AudioSys.muted=!AudioSys.muted; return; }
+  if(!keys[k]) pressed[k]=true;
+  keys[k]=true;
+});
+addEventListener('keyup',e=>{ keys[e.key.toLowerCase()]=false; });
+function hit(...ks){ return ks.some(k=>pressed[k]); }
+function down(...ks){ return ks.some(k=>keys[k]); }
+function clearPressed(){ for(const k in pressed) pressed[k]=false; }
+cv.addEventListener('pointerdown',()=>{ AudioSys.init(); pressed['z']=true; keys['z']=true; setTimeout(()=>keys['z']=false,80); });
+
+/* ---------- estado global ---------- */
+const S = {
+  mode:'title', // title|intro|over|dialog|battle|gameover|ending|shop?
+  tick:0, time:0,
+  player:{ lv:1, hp:20, maxhp:20, atk:6, def:0, xp:0, gold:0, kills:0, spared:0,
+           items:['Caramelo x3','Tarta telaraña','Vendaje'] },
+  flags:{ metRuna:false, dummyDone:false, ranitaDone:false, bossUnlocked:false, bossDone:false, talkedSave:false },
+  dialog:null, battle:null, shake:0, flash:0, fade:1, fadeDir:-1,
+};
+function saveGame(){ try{ localStorage.setItem('subsuelo_save', JSON.stringify({player:S.player,flags:S.flags,px:OW.px,py:OW.py})); }catch(e){} }
+function loadGame(){ try{ const d=JSON.parse(localStorage.getItem('subsuelo_save')); if(d){ S.player=d.player; S.flags=d.flags; OW.px=d.px; OW.py=d.py; return true; } }catch(e){} return false; }
+
+/* ---------- mapa overworld ---------- */
+const MAP = [
+"##############################",
+"#............PP..........#...#",
+"#..F.......##PP##....,,,,#...#",
+"#.......F..##PP##...,,,,,#...#",
+"#..,,,..........F...,,,,,#.S.#",
+"#..,,,..####..........,,,#...#",
+"#..,,,..#..#....PP........#..#",
+"#........#..#....PP...F......#",
+"#..F.....####.....F..........#",
+"#..........F.......,,,,......#",
+"#.....R.....T......,,,,..F...#",
+"#..................,,,,......#",
+"#..d.....F...................#",
+"#.........####.....PP....F...#",
+"#......... #..#....PP........#",
+"#..F...... #..#..........D...#",
+"#..........####..........#...#",
+"#............................#",
+"#..C.........................#",
+"##############################",
+];
+const TW=32, MH=MAP.length, MW=MAP[0].length;
+function tileAt(tx,ty){ if(tx<0||ty<0||tx>=MW||ty>=MH) return '#'; return MAP[ty][tx]; }
+function solidAt(tx,ty){ const t=tileAt(tx,ty); return t==='#'||t==='P'; }
+
+const OW = {
+  px:3.5*TW, py:17.5*TW, dir:'up', moving:false, step:0, speed:2.2,
+  camX:0, camY:0, encCool:0,
+  npcs:[
+    {id:'runa', tx:14, ty:10, name:'Runa', color:'#fff', done:false},
+    {id:'ranita', tx:7, ty:10, name:'Croak', color:'#7CFC00'},
+    {id:'dummy', tx:3, ty:12, name:'Muñeco', color:'#c9a86a'},
+  ],
+  reset(){ this.px=3.5*TW; this.py=17.5*TW; }
+};
+function npcAt(tx,ty){ return OW.npcs.find(n=>n.tx===tx&&n.ty===ty); }
+function interactTarget(){
+  const d=OW.dir; let tx=Math.floor(OW.px/TW), ty=Math.floor(OW.py/TW);
+  if(d==='up')ty--; if(d==='down')ty++; if(d==='left')tx--; if(d==='right')tx++;
+  const n=npcAt(tx,ty); if(n) return {type:'npc',npc:n};
+  const t=tileAt(tx,ty);
+  if(t==='S') return {type:'save'};
+  if(t==='C') return {type:'candy'};
+  if(t==='D') return {type:'door'};
+  return null;
+}
+
+/* ---------- diálogos ---------- */
+function say(pages, cb){ S.dialog={pages, i:0, chars:0, done:false, cb}; S.mode='dialog'; }
+function drawDialogBox(){
+  const d=S.dialog; if(!d) return;
+  ctx.fillStyle='#000'; ctx.fillRect(28,330,584,122);
+  ctx.strokeStyle='#fff'; ctx.lineWidth=3; ctx.strokeRect(28,330,584,122);
+  const page=d.pages[d.i];
+  ctx.fillStyle='#fff'; ctx.font='18px "Courier New",monospace'; ctx.textBaseline='top';
+  const visible=page.slice(0,Math.floor(d.chars));
+  wrapText(visible, 48, 348, 544, 24);
+  if(d.done){ ctx.fillStyle='#ff0'; if(Math.floor(S.tick/20)%2===0) ctx.fillText('▼', 592, 420); }
+}
+function wrapText(text,x,y,maxW,lh){
+  const words=text.split(' '); let line='',yy=y;
+  for(const w of words){ const t=line?line+' '+w:w;
+    if(ctx.measureText(t).width>maxW){ ctx.fillText(line,x,yy); yy+=lh; line=w; } else line=t; }
+  ctx.fillText(line,x,yy);
+}
+
+/* ---------- enemigos ---------- */
+const ENEMIES = {
+  croak:{ name:'Croak', maxhp:24, atkP:6,
+    desc:['Una ranita del subsuelo.','Croe alegremente.'],
+    acts:[{id:'saludar',label:'Saludar',tip:'* Le saludas con la mano.'},
+          {id:'elogio',label:'Elogio',tip:'* Le dices que su croar es bonito.'},
+          {id:'amenaza',label:'Amenaza',tip:'* Le amenazas. Tiembla.'}],
+    spareAfter:['elogio','elogio'], check:'* CROAK parece feliz. ¡Puedes perdonarlo!' },
+  dummy:{ name:'Muñeco de prácticas', maxhp:30, atkP:5,
+    desc:['Muñeco de entrenamiento.','No siente nada. ¿O sí?'],
+    acts:[{id:'hablar',label:'Hablar',tip:'* Le hablas... no responde.'},
+          {id:'abrazo',label:'Abrazo',tip:'* Le abrazas. Cruje un poco.'}],
+    spareAfter:['abrazo','hablar'], check:'* El Muñeco parece en paz.' },
+  floruga:{ name:'FLORUGA', maxhp:60, atkP:9,
+    desc:['La flor que ríe en la oscuridad.','"¿Cómo has llegado tan lejos, encanto?"'],
+    acts:[{id:'razonar',label:'Razonar',tip:'* Intentas razonar con ella.'},
+          {id:'sonreir',label:'Sonreír',tip:'* Sonríes. Ella frunce el ceño.'},
+          {id:'desafio',label:'Desafío',tip:'* "¡No te tengo miedo!"'}],
+    spareAfter:['razonar','sonreir','desafio'], check:'* FLORUGA duda... ¡Su defensa bajó!' },
+};
+
+/* ---------- batalla ---------- */
+function startBattle(id, opts={}){
+  const base=ENEMIES[id];
+  S.battle={
+    id, name:base.name, hp:base.maxhp, maxhp:base.maxhp,
+    actsDone:[], spareable:false, mercyTries:0,
+    state:'intro', t:0, menu:0, sub:0, msg:['* '+choice(base.desc)],
+    soul:{x:320,y:250}, bullets:[], spawnT:0, dodgeT:0, dodgeMax: id==='floruga'?9:7,
+    atkBar:{x:0,dir:1,active:false}, dmg:0, inv:0, boss: id==='floruga',
+    turn:0, isBossFight:!!opts.boss, fled:false,
+  };
+  S.mode='battle'; AudioSys.encounter(); S.shake=8; S.flash=0.6;
+}
+function enemySpareReady(b){ const need=ENEMIES[b.id].spareAfter;
+  // requiere haber usado esos ACTs (en orden libre, con repetición)
+  const c={}; b.actsDone.forEach(a=>c[a]=(c[a]||0)+1);
+  const req={}; need.forEach(a=>req[a]=(req[a]||0)+1);
+  return Object.keys(req).every(k=>(c[k]||0)>=req[k]);
+}
+function battleEnemyAttackPattern(b){
+  b.spawnT=0; b.dodgeT=b.dodgeMax; b.bullets=[];
+}
+function spawnBullets(b, dt){
+  b.spawnT-=dt;
+  const cx=320, cy=250, bw=b.boss?230:190, bh=b.boss?170:140;
+  if(b.spawnT>0) return;
+  if(b.id==='croak'){
+    b.spawnT=0.7;
+    const side=irnd(0,3); let x,y,vx,vy;
+    if(side===0){x=cx-bw/2;y=cy-bh/2+rnd(0,bh);vx=rnd(90,140);vy=rnd(-30,30);}
+    else if(side===1){x=cx+bw/2;y=cy-bh/2+rnd(0,bh);vx=-rnd(90,140);vy=rnd(-30,30);}
+    else if(side===2){y=cy-bh/2;x=cx-bw/2+rnd(0,bw);vy=rnd(90,140);vx=rnd(-30,30);}
+    else{y=cy+bh/2;x=cx-bw/2+rnd(0,bw);vy=-rnd(90,140);vx=rnd(-30,30);}
+    b.bullets.push({x,y,vx,vy,r:6,col:'#7CFC00',kind:'mosca'});
+  } else if(b.id==='dummy'){
+    b.spawnT=0.55;
+    const a=rnd(0,Math.PI*2);
+    b.bullets.push({x:cx,y:cy,vx:Math.cos(a)*rnd(80,130),vy:Math.sin(a)*rnd(80,130),r:6,col:'#c9a86a',kind:'hilo'});
+  } else { // floruga: espirales + pellets
+    b.spawnT=0.28;
+    b._ang=(b._ang||0)+0.55;
+    for(let k=0;k<2;k++){ const a=b._ang+k*Math.PI;
+      b.bullets.push({x:cx,y:cy-20,vx:Math.cos(a)*120,vy:Math.sin(a)*120,r:6,col:k?'#ff5fd2':'#fff',kind:'petalo'}); }
+    if(Math.random()<0.25) b.bullets.push({x:cx+rnd(-bw/2,bw/2),y:cy-bh/2,vx:rnd(-30,30),vy:rnd(120,170),r:5,col:'#ff0',kind:'llanto'});
+  }
+}
+function healItem(name){
+  const p=S.player;
+  if(name.startsWith('Caramelo')){ if(!p.items.includes(name))return false;
+    p.hp=clamp(p.hp+8,0,p.maxhp); consumeItem(name,'Caramelo'); return true; }
+  if(name==='Tarta telaraña'){ p.hp=clamp(p.hp+14,0,p.maxhp); removeItem(name); return true; }
+  if(name==='Vendaje'){ p.hp=clamp(p.hp+10,0,p.maxhp); removeItem(name); return true; }
+  return false;
+}
+function consumeItem(full,prefix){ const p=S.player; const i=p.items.indexOf(full);
+  const m=full.match(/x(\d+)/);
+  if(m){ let n=parseInt(m[1])-1; p.items.splice(i,1); if(n>0)p.items.push(prefix+' x'+n); }
+  else p.items.splice(i,1);
+}
+function removeItem(n){ const i=S.player.items.indexOf(n); if(i>=0)S.player.items.splice(i,1); }
+function gainXP(b){
+  const p=S.player; const xp = b.id==='croak'?12 : b.id==='dummy'?10 : 40;
+  const gold = b.id==='floruga'?50 : irnd(8,16);
+  p.gold+=gold;
+  if(b.sparedByMercy){ p.spared++; return {xp:0,gold,text:`* GANAS ${gold}G.`}; }
+  p.xp+=xp; p.kills++;
+  let lvMsg='';
+  const need=p.lv*20;
+  if(p.xp>=need){ p.lv++; p.maxhp+=4; p.hp=p.maxhp; p.atk+=1; lvMsg=` ¡Tu LV sube a ${p.lv}! HP restaurado.`; AudioSys.heal(); }
+  return {xp,gold,text:`* GANAS ${xp} XP y ${gold}G.${lvMsg}`};
+}
+
+/* ---------- dibujo sprites (pixel-art procedural) ---------- */
+function px(x,y,w,h,c){ ctx.fillStyle=c; ctx.fillRect(x|0,y|0,w,h); }
+function drawHeart(x,y,s,col){ ctx.fillStyle=col||'#f00';
+  ctx.fillRect(x-s/3,y-s/6,s/1.5,s/3); ctx.fillRect(x-s/2,y,s,s/2);
+  ctx.fillRect(x-s/6,y-s/2,s/3,s/3); ctx.beginPath();
+  ctx.moveTo(x-s/2,y+s/4); ctx.lineTo(x,y+s); ctx.lineTo(x+s/2,y+s/4); ctx.closePath(); ctx.fill(); }
+function drawPlayerOW(x,y,dir,step){
+  const b=Math.floor(step/10)%2;
+  px(x-8,y-14,16,20,'#c33'); // cuerpo
+  px(x-8,y-14+b,16,4,'#e66');
+  px(x-6,y-26,12,12,'#f2c89b'); // cara
+  px(x-6,y-26,12,3,'#5a3a1a'); // pelo
+  px(x-4,y-22,2,3,'#000'); px(x+2,y-22,2,3,'#000');
+  if(dir==='left')px(x-11,y-10,3,8,'#f2c89b'); if(dir==='right')px(x+8,y-10,3,8,'#f2c89b');
+  px(x-7,y+6,6,6+b*2,'#335'); px(x+1,y+6,6,6+(1-b)*2,'#335');
+}
+function drawNPC(n,x,y){
+  const hop=Math.sin(S.tick/20+n.tx)*1.5;
+  if(n.id==='runa'){ px(x-9,y-16,18,22,'#fff'); px(x-9,y-16,18,6,'#e8e8e8');
+    px(x-7,y-28,14,13,'#fff'); px(x-7,y-28,14,4,'#ddd');
+    px(x-5,y-24,3,4,'#000'); px(x+2,y-24,3,4,'#000');
+    px(x-11,y-30,4,8,'#fff'); px(x+7,y-30,4,8,'#fff'); // orejas/cuernos
+    px(x-9,y+hop*0.3,7,7,'#a78bfa'); px(x+2,y+hop*0.3,7,7,'#a78bfa'); }
+  else if(n.id==='ranita'){ px(x-10,y-12+hop,20,14,'#4caf50'); px(x-10,y-12+hop,20,4,'#7CFC00');
+    px(x-8,y-20+hop,7,8,'#fff'); px(x+1,y-20+hop,7,8,'#fff');
+    px(x-6,y-18+hop,3,4,'#000'); px(x+3,y-18+hop,3,4,'#000'); }
+  else { px(x-8,y-18,16,20,'#c9a86a'); px(x-8,y-18,16,4,'#8a6d3b');
+    px(x-5,y-14,3,3,'#000'); px(x+2,y-14,3,3,'#000'); px(x-4,y-8,8,2,'#000'); }
+}
+function drawEnemyBig(b){
+  const x=320,y=140+Math.sin(S.tick/25)*4;
+  if(b.id==='croak'){ px(x-46,y-40,92,70,'#4caf50'); px(x-46,y-40,92,14,'#7CFC00');
+    px(x-36,y-62,28,26,'#fff'); px(x+8,y-62,28,26,'#fff');
+    px(x-28,y-54,10,14,'#000'); px(x+16,y-54,10,14,'#000');
+    px(x-8,y-54,16,8,'#fff'); px(x-30,y-8,60,8,'#2e7d32');
+    if(b.hp<=0){ ctx.fillStyle='#000'; ctx.fillRect(x-46,y-62,92,100); } }
+  else if(b.id==='dummy'){ px(x-34,y-46,68,84,'#c9a86a'); px(x-34,y-46,68,12,'#8a6d3b');
+    px(x-22,y-32,12,12,'#000'); px(x+10,y-32,12,12,'#000');
+    px(x-14,y-6,28,6,'#5a3a1a'); px(x-40,y-20,8,30,'#c9a86a'); px(x+32,y-20,8,30,'#c9a86a'); }
+  else { // floruga boss
+    const sway=Math.sin(S.tick/18)*6;
+    px(x-5,y+10+sway*0.2,10,50,'#2e7d32'); // tallo
+    px(x-30,y+30,26,10,'#388e3c'); px(x+4,y+30,26,10,'#388e3c');
+    for(let i=0;i<6;i++){ const a=i/6*Math.PI*2+S.tick/40;
+      px(x+Math.cos(a)*30-8,y-10+Math.sin(a)*16-8+sway,16,16,i%2?'#ff5fd2':'#f8bbd0'); }
+    px(x-16,y-26+sway,32,32,'#ffeb3b'); // cara
+    const mad=b.hp<b.maxhp*0.5;
+    px(x-10,y-16+sway,7,mad?10:7,mad?'#f00':'#000'); px(x+3,y-16+sway,7,mad?10:7,mad?'#f00':'#000');
+    ctx.fillStyle=mad?'#000':'#5a3a1a';
+    if(mad){ ctx.fillRect(x-12,y+2+sway,24,6); } else { ctx.beginPath(); ctx.arc(x,y+2+sway,10,0.2,Math.PI-0.2); ctx.fill(); }
+  }
+}
+
+/* ---------- update ---------- */
+function update(dt){
+  S.tick++; S.time+=dt;
+  if(S.flash>0)S.flash-=dt; if(S.shake>0)S.shake-=dt*30;
+  if(S.fadeDir<0&&S.fade>0)S.fade=Math.max(0,S.fade-dt*1.2);
+  if(S.mode==='dialog'&&S.dialog){
+    const d=S.dialog, page=d.pages[d.i];
+    if(d.chars<page.length){ d.chars+=dt*45; if(Math.floor(d.chars)%3===0)AudioSys.txt(); }
+    else d.done=true;
+    if(hit('z','enter',' ')){ if(!d.done){ d.chars=page.length; d.done=true; }
+      else { d.i++; AudioSys.confirm();
+        if(d.i>=d.pages.length){ const cb=d.cb; S.dialog=null; S.mode = S.battle&&S.battle._resume ? 'battle':'over'; if(cb)cb(); }
+        else { d.chars=0; d.done=false; } } }
+  }
+  else if(S.mode==='over') updateOver(dt);
+  else if(S.mode==='battle') updateBattle(dt);
+  else if(S.mode==='title'){ if(hit('z','enter',' ')){ AudioSys.init(); AudioSys.confirm(); startIntro(); }
+    if(hit('c')){ if(loadGame()){ S.mode='over'; S.fade=1; S.fadeDir=-1; } } }
+  else if(S.mode==='intro'){ S._introT=(S._introT||0)+dt;
+    if(hit('z','enter',' ')&&S._introT>0.6){ S._introI=(S._introI||0)+1; S._introT=0; AudioSys.confirm();
+      if(S._introI>=INTRO.length){ S.mode='over'; S.fade=1; S.fadeDir=-1; } } }
+  else if(S.mode==='gameover'){ if(hit('z','enter',' ')){ const p=S.player; p.hp=p.maxhp; S.mode='over'; OW.reset(); S.fade=1; S.fadeDir=-1; } }
+  else if(S.mode==='ending'){ if(hit('z','enter',' ')){ location.reload(); } }
+  clearPressed();
+}
+
+const INTRO=[
+  "Hace mucho, los humanos y los monstruos vivían en paz...",
+  "Hasta que la guerra los separó. Los monstruos fueron sellados bajo el monte Ebott.",
+  "Dicen que quien sube la montaña... jamás regresa.",
+  "Un día, un niño tropezó con una raíz... y cayó. Cayó muy hondo.",
+  "Bienvenido al SUBSUELO. (Pulsa Z para continuar)",
+];
+
+function startIntro(){ S.mode='intro'; S._introI=0; S._introT=0; }
+
+function updateOver(dt){
+  const p=S.player;
+  let mx=0,my=0;
+  if(down('arrowleft','a'))mx-=1; if(down('arrowright','d'))mx+=1;
+  if(down('arrowup','w'))my-=1; if(down('arrowdown','s'))my+=1;
+  OW.moving=!!(mx||my);
+  if(OW.moving){ const l=Math.hypot(mx,my); mx/=l; my/=l;
+    if(Math.abs(mx)>Math.abs(my)) OW.dir=mx<0?'left':'right'; else OW.dir=my<0?'up':'down';
+    const nx=OW.px+mx*OW.speed, ny=OW.py+my*OW.speed;
+    if(!collide(nx,OW.py))OW.px=nx; if(!collide(OW.px,ny))OW.py=ny;
+    OW.step+=dt*60;
+    // encuentros en hierba
+    const t=tileAt(Math.floor(OW.px/TW),Math.floor(OW.py/TW));
+    OW.encCool-=dt;
+    if((t===',')&&OW.encCool<=0&&Math.random()<0.012){ OW.encCool=3;
+      startBattle(Math.random()<0.55?'croak':'dummy'); return; }
+  }
+  OW.camX=clamp(OW.px-W/2,0,MW*TW-W); OW.camY=clamp(OW.py-H/2+40,0,MH*TW-H);
+  if(hit('z','enter',' ')){
+    const t=interactTarget();
+    if(!t){ /* nada */ }
+    else if(t.type==='npc') talkNPC(t.npc);
+    else if(t.type==='save'){ AudioSys.heal(); saveGame();
+      say(['* (El brillo de la estrella llena tu determinación.)','* ¡Partida guardada! HP restaurado.'],()=>{p.hp=p.maxhp;}); }
+    else if(t.type==='candy'){ AudioSys.confirm();
+      if(!p.items.includes('Caramelo x3')&&!p.items.some(i=>i.startsWith('Caramelo'))){p.items.push('Caramelo x3');say(['* Coges unos caramelos del cuenco. (OBJETO conseguido)']);}else say(['* El cuenco está vacío... por ahora.']); }
+    else if(t.type==='door'){
+      if(!S.flags.bossUnlocked){ say(['* La puerta está sellada por raíces.','* Una voz suena tras ella: "Demuestra tu corazón... perdona o lucha, pero avanza."','* (Parece que debes conocer a los habitantes: habla con todos y sobrevive.)']); }
+      else if(!S.flags.bossDone){ say(['* Las raíces se apartan...'],()=>startBattle('floruga',{boss:true})); }
+      else say(['* Más allá solo hay luz. El subsuelo queda en paz.']);
+    }
+  }
+  // desbloqueo boss: hablar con runa + ranita + dummy
+  if(S.flags.metRuna&&S.flags.ranitaDone&&S.flags.dummyDone) S.flags.bossUnlocked=true;
+}
+function collide(x,y){
+  const r=9;
+  for(const [ox,oy] of [[-r,-r],[r,-r],[-r,r],[r,r],[0,0]]){
+    const tx=Math.floor((x+ox)/TW), ty=Math.floor((y+oy+8)/TW);
+    if(solidAt(tx,ty))return true;
+    const n=npcAt(tx,ty); if(n)return true;
+  }
+  return false;
+}
+function talkNPC(n){
+  AudioSys.confirm();
+  if(n.id==='runa'){
+    if(!S.flags.metRuna){ S.flags.metRuna=true;
+      say(['* Hola, pequeño. Soy RUNA, guardiana de estas ruinas.','* Has caído al SUBSUELO. No temas: aquí решаем todo... hablando o esquivando.','* Al norte hay hierba alta con monstruos. Si te atacan, usa PIEDAD si tu corazón es puro.','* Ven a verme cuando hayas hecho amigos. La gran puerta del este se abrirá. (Consejo: Z = aceptar)']); }
+    else if(S.flags.bossUnlocked) say(['* Ya veo bondad (o valor) en ti. La puerta del este te espera.','* FLORUGA no es mala... solo está... sola. Elige con tu corazón.']);
+    else say(['* Explora, habla con CROAK y el MUÑECO. Aprende a PERDONAR... o a LUCHAR.']);
+  } else if(n.id==='ranita'){
+    say(['* ¡Croac! Soy CROAK. ¿Sabías que con ELOGIO me pongo contento?','* En batalla: ACTUAR > Elogio x2 y luego PIEDAD. ¡Pruébalo en la hierba!'],()=>{S.flags.ranitaDone=true;});
+  } else {
+    say(['* ... soy un MUÑECO de prácticas. Golpéame o abrázame, me da igual.','* Dicen que si me ABRAZAS y me HABLAS, me quedo en paz y me puedes PERDONAR.'],()=>{S.flags.dummyDone=true;});
+  }
+}
+
+/* ---------- batalla update ---------- */
+function updateBattle(dt){
+  const b=S.battle; if(!b)return; b.t+=dt;
+  if(b.inv>0)b.inv-=dt;
+  if(b.state==='intro'){ if(b.t>1.2){ b.state='menu'; b.t=0; } return; }
+  if(b.state==='menu'){
+    if(hit('arrowleft','a')){b.menu=(b.menu+3)%4;AudioSys.shoot();}
+    if(hit('arrowright','d')){b.menu=(b.menu+1)%4;AudioSys.shoot();}
+    if(hit('z','enter',' ')){ AudioSys.confirm();
+      if(b.menu===0){ b.state='attackAim'; b.atkBar={x:20,dir:1}; }
+      else if(b.menu===1){ b.state='act'; b.sub=0; }
+      else if(b.menu===2){ b.state='item'; b.sub=0; }
+      else { tryMercy(b); } }
+    return;
+  }
+  if(b.state==='act'){
+    const acts=ENEMIES[b.id].acts;
+    if(hit('arrowup','w')){b.sub=(b.sub+acts.length-1)%acts.length;AudioSys.shoot();}
+    if(hit('arrowdown','s')){b.sub=(b.sub+1)%acts.length;AudioSys.shoot();}
+    if(hit('x','shift')){b.state='menu';}
+    if(hit('z','enter',' ')){ doAct(b,acts[b.sub]); }
+    return;
+  }
+  if(b.state==='item'){
+    const it=S.player.items;
+    if(hit('arrowup','w')){b.sub=(b.sub+it.length-1)%Math.max(1,it.length);AudioSys.shoot();}
+    if(hit('arrowdown','s')){b.sub=(b.sub+1)%Math.max(1,it.length);AudioSys.shoot();}
+    if(hit('x','shift')){b.state='menu';}
+    if(hit('z','enter',' ')&&it.length){ const name=it[b.sub];
+      if(healItem(name)){ AudioSys.heal(); b.msg=['* Comes '+name+'. ¡Recuperas HP!']; }
+      else b.msg=['* No queda '+name+'.'];
+      b.sub=0; enemyTurn(b); }
+    return;
+  }
+  if(b.state==='attackAim'){
+    const bar=b.atkBar; bar.x+=bar.dir*420*dt;
+    if(bar.x>600){bar.x=600;bar.dir=-1;} if(bar.x<20){bar.x=20;bar.dir=1;}
+    if(hit('z','enter',' ')){ // calcular daño
+      const d=Math.abs(bar.x-310); const acc=1-d/300;
+      b.dmg=Math.max(1,Math.round(S.player.atk*(0.4+acc*1.4)+rnd(-1,1)));
+      if(b.boss&&b.hp<=b.maxhp*0.4) b.dmg=Math.round(b.dmg*0.8);
+      b.state='attackAnim'; b.t=0; AudioSys.shoot(); }
+    return;
+  }
+  if(b.state==='attackAnim'){
+    if(b.t>0.5){ b.hp-=b.dmg; b.t=0;
+      if(b.hp<=0){ b.hp=0; winBattle(b,false); return; }
+      b.msg=['* ¡Golpeas a '+b.name+'! ('+b.dmg+' daño)'];
+      if(b.boss&&b.hp<b.maxhp*0.5)b.msg.push('* FLORUGA ríe... "¡No está mal, encanto!"');
+      enemyTurn(b); }
+    return;
+  }
+  if(b.state==='msg'){ if(b.t>0.4&&hit('z','enter',' ')){ b.state='menu'; b.t=0; } return; }
+  if(b.state==='dodge'){
+    const k=3.0;
+    if(down('arrowleft','a'))b.soul.x-=220*dt; if(down('arrowright','d'))b.soul.x+=220*dt;
+    if(down('arrowup','w'))b.soul.y-=220*dt; if(down('arrowdown','s'))b.soul.y+=220*dt;
+    const bw=b.boss?230:190,bh=b.boss?170:140;
+    b.soul.x=clamp(b.soul.x,320-bw/2+10,320+bw/2-10);
+    b.soul.y=clamp(b.soul.y,250-bh/2+10,250+bh/2-10);
+    spawnBullets(b,dt);
+    for(const bl of b.bullets){ bl.x+=bl.vx*dt; bl.y+=bl.vy*dt; }
+    b.bullets=b.bullets.filter(bl=>Math.abs(bl.x-320)<300&&Math.abs(bl.y-250)<250);
+    if(b.inv<=0){ for(const bl of b.bullets){
+      if(Math.hypot(bl.x-b.soul.x,bl.y-b.soul.y)<bl.r+5){
+        const dmg=b.id==='floruga'?irnd(5,8):irnd(3,6);
+        S.player.hp-=Math.max(1,dmg-S.player.def); b.inv=1.0; AudioSys.hurt(); S.shake=6;
+        if(S.player.hp<=0){ S.player.hp=0; gameOver(); return; }
+        break; } } }
+    b.dodgeT-=dt;
+    if(b.dodgeT<=0){ b.bullets=[]; b.state='menu'; b.t=0;
+      b.msg=['* '+choice(ENEMIES[b.id].desc)]; if(b.spareable)b.msg=['* '+ENEMIES[b.id].check]; }
+    return;
+  }
+  if(b.state==='win'||b.state==='spare'){ if(b.t>0.6&&hit('z','enter',' ')){ endBattleCleanup(b); } return; }
+}
+function doAct(b,act){
+  AudioSys.confirm(); b.actsDone.push(act.id);
+  if(enemySpareReady(b)&&!b.spareable){ b.spareable=true; AudioSys.spare(); }
+  const extra=b.spareable?(' '+ENEMIES[b.id].check):'';
+  b.msg=['* '+act.tip+extra];
+  enemyTurn(b);
+}
+function tryMercy(b){
+  if(b.spareable||b.id==='dummy'&&b.actsDone.length>=1&&Math.random()<0.4||b.boss&&b.hp<b.maxhp*0.35){
+    b.spareable=true; winBattle(b,true); return;
+  }
+  b.mercyTries++; b.msg=['* Intentas perdonar... pero '+b.name+' aún no cede.'];
+  if(b.id==='croak')b.msg.push('* (Prueba ACTUAR > Elogio dos veces)');
+  if(b.id==='dummy')b.msg.push('* (Prueba ACTUAR > Abrazo + Hablar)');
+  if(b.boss)b.msg.push('* (Debilítala o usa Razonar/Sonreír/Desafío)');
+  enemyTurn(b);
+}
+function enemyTurn(b){ b.state='dodge'; b.t=0; battleEnemyAttackPattern(b);
+  b.soul.x=320; b.soul.y=250; }
+function winBattle(b,byMercy){
+  b.sparedByMercy=byMercy||b.spareable&&b.hp>0&&byMercy!==false&&b.state!=='attackAnim' ? true : byMercy;
+  // si llegó por daño, no es mercy
+  if(b.state==='attackAnim') b.sparedByMercy=false;
+  if(byMercy){ b.state='spare'; }
+  else { b.state='win'; }
+  b.t=0; AudioSys.spare();
+  const r=gainXP(b); b.reward=r;
+  if(b.id==='floruga'){ S.flags.bossDone=true; }
+  if(b.id==='croak')S.flags.ranitaDone=true;
+  if(b.id==='dummy')S.flags.dummyDone=true;
+  if(S.flags.metRuna&&S.flags.ranitaDone&&S.flags.dummyDone)S.flags.bossUnlocked=true;
+}
+function endBattleCleanup(b){
+  saveGame();
+  if(b.isBossFight||b.id==='floruga'){ // final
+    S.mode='ending'; S.battle=null; return; }
+  S.battle=null; S.mode='over'; S.fade=1; S.fadeDir=-1;
+}
+function gameOver(){ S.mode='gameover'; S.battle=null; AudioSys.hurt(); }
+
+/* ---------- render ---------- */
+function render(){
+  ctx.save();
+  if(S.shake>0)ctx.translate(rnd(-S.shake,S.shake),rnd(-S.shake,S.shake));
+  ctx.fillStyle='#000'; ctx.fillRect(-20,-20,W+40,H+40);
+  if(S.mode==='title')renderTitle();
+  else if(S.mode==='intro')renderIntro();
+  else if(S.mode==='over'||S.mode==='dialog')renderOver();
+  else if(S.mode==='battle')renderBattle();
+  else if(S.mode==='gameover')renderGameOver();
+  else if(S.mode==='ending')renderEnding();
+  if(S.mode==='dialog')drawDialogBox();
+  if(S.flash>0){ ctx.fillStyle=`rgba(255,255,255,${S.flash})`; ctx.fillRect(0,0,W,H); }
+  if(S.fade>0){ ctx.fillStyle=`rgba(0,0,0,${S.fade})`; ctx.fillRect(0,0,W,H); }
+  ctx.restore();
+}
+function renderTitle(){
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+  for(let i=0;i<80;i++){ const y=(S.tick*0.4+i*37)%H; ctx.fillStyle='#222'; ctx.fillRect((i*97)%W,y,2,2); }
+  drawHeart(320,150+Math.sin(S.tick/30)*5,36,'#f00');
+  ctx.textAlign='center';
+  ctx.fillStyle='#fff'; ctx.font='bold 44px "Courier New",monospace';
+  ctx.fillText('SUBSUELO',320,240);
+  ctx.font='15px "Courier New",monospace'; ctx.fillStyle='#aaa';
+  ctx.fillText('— un demake homenaje para navegador —',320,266);
+  ctx.fillStyle='#ff0'; ctx.font='17px "Courier New",monospace';
+  if(Math.floor(S.tick/30)%2===0)ctx.fillText('Pulsa Z / Enter para empezar',320,330);
+  ctx.fillStyle='#666'; ctx.font='13px "Courier New",monospace';
+  ctx.fillText('C: continuar partida guardada · M: sonido on/off',320,360);
+  ctx.fillText('Mover: flechas/WASD · Aceptar: Z · Cancelar: X',320,382);
+  ctx.fillText(' Inspirado en la fórmula de UNDERTALE · obra original sin assets ajenos ',320,430);
+  ctx.textAlign='left';
+}
+function renderIntro(){
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+  const i=S._introI||0;
+  ctx.fillStyle='#fff'; ctx.font='20px "Courier New",monospace';
+  wrapText(INTRO[i]||'',80,200,480,30);
+  ctx.fillStyle='#666'; ctx.font='14px "Courier New",monospace'; ctx.textAlign='center';
+  ctx.fillText(`Z: continuar  (${i+1}/${INTRO.length})`,320,420); ctx.textAlign='left';
+}
+function renderOver(){
+  // suelo
+  for(let ty=0;ty<MH;ty++)for(let tx=0;tx<MW;tx++){
+    const t=MAP[ty][tx], x=tx*TW-OW.camX, y=ty*TW-OW.camY;
+    if(x<-TW||y<-TW||x>W||y>H)continue;
+    if(t==='#'){ ctx.fillStyle=Math.floor(S.tick/60+tx+ty)%2?'#1a1a2e':'#16162a'; ctx.fillRect(x,y,TW,TW);
+      ctx.fillStyle='#2c2c54'; ctx.fillRect(x,y,TW,3); ctx.fillRect(x,y+TW-3,TW,3); }
+    else if(t===','){ ctx.fillStyle='#0d2818'; ctx.fillRect(x,y,TW,TW);
+      ctx.fillStyle='#1b5e20'; for(let g=0;g<8;g++)ctx.fillRect(x+(g*13+ty*7)%TW,y+((g*29)%TW),3,8+((g+ty)%3)*3); }
+    else if(t==='P'){ ctx.fillStyle='#101018'; ctx.fillRect(x,y,TW,TW);
+      ctx.fillStyle='#3d3d6b'; ctx.fillRect(x+4,y, TW-8,TW); ctx.fillStyle='#565694'; ctx.fillRect(x+4,y,TW-8,4); }
+    else { ctx.fillStyle='#0b0b14'; ctx.fillRect(x,y,TW,TW);
+      if((tx+ty)%3===0){ctx.fillStyle='#151524';ctx.fillRect(x+8,y+8,4,4);} }
+    if(t==='F'){ ctx.fillStyle='#1b5e20'; ctx.fillRect(x+13,y+18,6,10);
+      ctx.fillStyle='#ffeb3b'; ctx.fillRect(x+9,y+10,14,10); ctx.fillStyle='#f00'; ctx.fillRect(x+13,y+13,6,4); }
+    if(t==='S'){ const gl=3+Math.sin(S.tick/15)*2;
+      ctx.fillStyle='#ff0'; ctx.fillRect(x+TW/2-2-gl/2,y+6,4+gl,4+gl);
+      ctx.fillStyle='#fff'; ctx.fillRect(x+TW/2-1,y+8,2,2); }
+    if(t==='C'){ ctx.fillStyle='#5d4037'; ctx.fillRect(x+4,y+16,24,12);
+      ctx.fillStyle='#f00'; ctx.fillRect(x+8,y+12,5,6); ctx.fillStyle='#ff0'; ctx.fillRect(x+15,y+12,5,6); }
+    if(t==='D'){ ctx.fillStyle='#3e2723'; ctx.fillRect(x+2,y, TW-4,TW);
+      ctx.fillStyle='#8d6e63'; ctx.fillRect(x+2,y,TW-4,4);
+      ctx.fillStyle=S.flags.bossUnlocked?'#7CFC00':'#f00'; ctx.fillRect(x+TW/2-3,y+12,6,6); }
+  }
+  for(const n of OW.npcs)drawNPC(n,n.tx*TW+TW/2-OW.camX,n.ty*TW+TW-OW.camY-4);
+  drawPlayerOW(OW.px-OW.camX,OW.py-OW.camY,OW.dir,OW.step);
+  // HUD mundo
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,34);
+  ctx.strokeStyle='#333'; ctx.strokeRect(0,34,W,1);
+  ctx.fillStyle='#fff'; ctx.font='14px "Courier New",monospace';
+  ctx.fillText(`LV ${S.player.lv}   HP ${S.player.hp}/${S.player.maxhp}   G ${S.player.gold}   XP ${S.player.xp}`,14,22);
+  ctx.fillStyle=S.flags.bossUnlocked?'#7CFC00':'#666';
+  ctx.fillText(S.flags.bossUnlocked?'→ ¡PUERTA ESTE ABIERTA!':'Habla con Runa, Croak y Muñeco',400,22);
+  const t=interactTarget();
+  if(t){ ctx.fillStyle='#ff0'; ctx.font='13px "Courier New",monospace'; ctx.textAlign='center';
+    ctx.fillText('[Z] '+(t.type==='npc'?'Hablar con '+t.npc.name:t.type==='save'?'Guardar':t.type==='candy'?'Coger caramelo':'Abrir puerta'),320,462);
+    ctx.textAlign='left'; }
+}
+function battleBox(){ const b=S.battle; const bw=b.boss?230:190,bh=b.boss?170:140; return {x:320-bw/2,y:250-bh/2,w:bw,h:bh}; }
+function renderBattle(){
+  const b=S.battle; if(!b)return;
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+  if(b.state!=='dodge'||true)drawEnemyBig(b);
+  // nombre + hp enemigo
+  ctx.fillStyle='#fff'; ctx.font='bold 18px "Courier New",monospace'; ctx.textAlign='center';
+  ctx.fillStyle=b.spareable?'#ff0':'#fff'; ctx.fillText((b.spareable?'* ':'')+b.name+(b.spareable?' (¡PERDONABLE!)':''),320,40);
+  ctx.fillStyle='#500'; ctx.fillRect(220,50,200,10);
+  ctx.fillStyle=b.spareable?'#ff0':'#0f0'; ctx.fillRect(220,50,200*(b.hp/b.maxhp),10);
+  ctx.textAlign='left';
+  if(b.state==='dodge'){
+    const box=battleBox();
+    ctx.fillStyle='#000'; ctx.fillRect(box.x,box.y,box.w,box.h);
+    ctx.strokeStyle='#fff'; ctx.lineWidth=4; ctx.strokeRect(box.x,box.y,box.w,box.h);
+    for(const bl of b.bullets){ ctx.fillStyle=bl.col;
+      ctx.beginPath(); ctx.arc(bl.x,bl.y,bl.r,0,7); ctx.fill();
+      ctx.fillStyle='#fff'; ctx.fillRect(bl.x-2,bl.y-2,4,4); }
+    if(b.inv<=0||Math.floor(S.tick/4)%2===0)drawHeart(b.soul.x,b.soul.y,20,'#f00');
+    ctx.fillStyle='#fff'; ctx.font='13px "Courier New",monospace'; ctx.textAlign='center';
+    ctx.fillText(`¡Esquiva! ${Math.ceil(b.dodgeT)}s`,320,box.y+box.h+22); ctx.textAlign='left';
+  } else {
+    // caja de texto
+    ctx.fillStyle='#000'; ctx.fillRect(40,200,560,110);
+    ctx.strokeStyle='#fff'; ctx.lineWidth=4; ctx.strokeRect(40,200,560,110);
+    ctx.fillStyle='#fff'; ctx.font='17px "Courier New",monospace';
+    const lines=b.msg||['* ...'];
+    lines.slice(0,3).forEach((l,i)=>ctx.fillText(l,60,230+i*26));
+    if(b.state==='attackAim'){
+      ctx.fillStyle='#111'; ctx.fillRect(20,330,600,40); ctx.strokeStyle='#fff'; ctx.strokeRect(20,330,600,40);
+      ctx.fillStyle='#333'; ctx.fillRect(300,330,20,40);
+      ctx.fillStyle='#ff0'; ctx.fillRect(b.atkBar.x-3,330,6,40);
+      ctx.fillStyle='#fff'; ctx.font='13px "Courier New",monospace'; ctx.textAlign='center';
+      ctx.fillText('¡Pulsa Z en el centro!',320,390); ctx.textAlign='left';
+    }
+    if(b.state==='attackAnim'){
+      ctx.fillStyle='#fff'; ctx.font='bold 30px "Courier New",monospace'; ctx.textAlign='center';
+      ctx.fillText('-'+b.dmg, 320, 150); ctx.textAlign='left';
+      ctx.fillStyle='#f00'; ctx.fillRect(100,170,440,8);
+    }
+    if(b.state==='act'){
+      const acts=ENEMIES[b.id].acts;
+      ctx.fillStyle='#000'; ctx.fillRect(40,330,560,80); ctx.strokeStyle='#fff'; ctx.strokeRect(40,330,560,80);
+      acts.forEach((a,i)=>{ ctx.fillStyle=b.sub===i?'#ff0':'#fff'; ctx.font='16px "Courier New",monospace';
+        ctx.fillText((b.sub===i?'> ':'  ')+a.label, 80+(i%2)*260, 360+Math.floor(i/2)*26); });
+    }
+    if(b.state==='item'){
+      const it=S.player.items;
+      ctx.fillStyle='#000'; ctx.fillRect(40,330,560,80); ctx.strokeStyle='#fff'; ctx.strokeRect(40,330,560,80);
+      if(!it.length){ctx.fillStyle='#888';ctx.fillText('  (vacío)',80,362);}
+      it.forEach((n,i)=>{ ctx.fillStyle=b.sub===i?'#ff0':'#fff'; ctx.font='15px "Courier New",monospace';
+        ctx.fillText((b.sub===i?'> ':'  ')+n, 80, 360+i*22); });
+    }
+    if(b.state==='win'||b.state==='spare'){
+      ctx.fillStyle='rgba(0,0,0,0.7)'; ctx.fillRect(40,200,560,110);
+      ctx.strokeStyle='#ff0'; ctx.strokeRect(40,200,560,110);
+      ctx.fillStyle='#ff0'; ctx.font='17px "Courier New",monospace';
+      if(b.state==='spare')ctx.fillText('* ¡PERDONADO! El enemigo se va en paz.',60,240);
+      else ctx.fillText('* ¡Victoria!',60,240);
+      ctx.fillStyle='#fff'; ctx.font='15px "Courier New",monospace';
+      ctx.fillText(b.reward?b.reward.text:'',60,268);
+      if(Math.floor(S.tick/25)%2===0){ctx.fillText('Pulsa Z para continuar',60,294);}
+    }
+  }
+  // botones + stats (estilo UT)
+  const labels=['LUCHAR','ACTUAR','OBJETO','PIEDAD'];
+  const icons=['⚔','◉','✚','❤'];
+  labels.forEach((L,i)=>{ const x=52+i*140;
+    const sel=b.state==='menu'&&b.menu===i;
+    ctx.fillStyle=sel?'#ff0':'#000'; rr(x,388,124,44,8);
+    if(sel){ctx.fill();} else {ctx.strokeStyle='#f80'; ctx.lineWidth=2; ctx.stroke();}
+    ctx.fillStyle=sel?'#000':'#f80'; ctx.font='bold 15px "Courier New",monospace'; ctx.textAlign='center';
+    ctx.fillText(icons[i]+' '+L,x+62,415); ctx.textAlign='left'; });
+  const p=S.player;
+  ctx.fillStyle='#fff'; ctx.font='bold 16px "Courier New",monospace';
+  ctx.fillText(`${'HUMANO'}  LV ${p.lv}`,52,452);
+  ctx.fillText('HP',250,452);
+  ctx.fillStyle='#700'; ctx.fillRect(285,440,160,16);
+  ctx.fillStyle='#ff0'; ctx.fillRect(285,440,160*(p.hp/p.maxhp),16);
+  ctx.fillStyle='#fff'; ctx.fillText(`${p.hp} / ${p.maxhp}`,455,452);
+  ctx.fillText(`${p.gold} G`,560,452);
+}
+function renderGameOver(){
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  drawHeart(320,200,48, Math.floor(S.tick/30)%2?'#500':'#f00');
+  ctx.fillStyle='#f00'; ctx.font='bold 36px "Courier New",monospace';
+  ctx.fillText('GAME OVER',320,300);
+  ctx.fillStyle='#fff'; ctx.font='15px "Courier New",monospace';
+  ctx.fillText('Tu determinación flaquea... pero no se rinde.',320,330);
+  if(Math.floor(S.tick/30)%2===0)ctx.fillText('Pulsa Z para intentarlo de nuevo',320,370);
+  ctx.textAlign='left';
+}
+function renderEnding(){
+  const p=S.player;
+  const pacifist=p.kills===0;
+  ctx.fillStyle=pacifist?'#001133':'#220000'; ctx.fillRect(0,0,W,H);
+  for(let i=0;i<100;i++){ctx.fillStyle=pacifist?'#3355ff':'#ff5533';ctx.fillRect((i*67)%W,(S.tick*0.5+i*43)%H,2,2);}
+  ctx.textAlign='center';
+  ctx.fillStyle='#fff'; ctx.font='bold 30px "Courier New",monospace';
+  ctx.fillText(pacifist?'FINAL PACIFISTA':'FINAL NEUTRAL',320,180);
+  ctx.font='16px "Courier New",monospace';
+  const lines=pacifist?
+    [`No mataste a nadie. Perdonaste incluso a FLORUGA.` ,`Runa te despide con una tarta. CROAK croa de alegría.`,`Monstruos perdonados: ${p.spared} · Oro: ${p.gold}G`,`¡Gracias por jugar a este homenaje!`]:
+    [`Sobreviviste al SUBSUELO.` ,`Enemigos derrotados: ${p.kills} · Perdonados: ${p.spared}`,`Oro: ${p.gold}G · LV ${p.lv}`,`Runa te mira en silencio... "Elige mejor la próxima vez."`];
+  lines.forEach((l,i)=>ctx.fillText(l,320,230+i*28));
+  if(Math.floor(S.tick/30)%2===0){ctx.fillStyle='#ff0';ctx.fillText('Pulsa Z para volver al título',320,400);}
+  ctx.textAlign='left';
+}
+
+/* ---------- loop ---------- */
+let last=performance.now();
+function loop(now){
+  const dt=Math.min(0.05,(now-last)/1000); last=now;
+  update(dt); render();
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
