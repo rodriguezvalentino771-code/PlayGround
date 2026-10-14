@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MUÑECO PLAYTIME: Capítulo 1 — Port Navegador (Fan Remake 3D)</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧸</text></svg>">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="app">
+  <canvas id="game-canvas"></canvas>
+
+  <!-- HUD -->
+  <div id="hud" class="hidden">
+    <div id="crosshair"><div class="dot"></div><div class="ring"></div></div>
+    <div id="objective-panel">
+      <div id="objective-title">OBJETIVO</div>
+      <div id="objective-text">...</div>
+      <div id="objective-sub">...</div>
+    </div>
+    <div id="hands-panel">
+      <div id="hand-left" class="hand blue"><span class="hand-name">AZUL [Click Izq]</span><span class="hand-state">lista</span></div>
+      <div id="hand-right" class="hand red"><span class="hand-name">ROJA [Click Der]</span><span class="hand-state">bloqueada</span></div>
+    </div>
+    <div id="stats-panel">
+      <div id="timer">00:00</div>
+      <div id="tapes">📼 0/4</div>
+      <div id="interact-tip" class="hidden">[E] Interactuar</div>
+    </div>
+    <div id="power-bar"><div id="power-fill"></div><span>ENERGÍA</span></div>
+    <div id="damage-vignette"></div>
+    <div id="chase-warning" class="hidden">⚠ ¡CORRE! ⚠</div>
+  </div>
+
+  <!-- Menú principal -->
+  <div id="menu-main" class="screen">
+    <div class="menu-card">
+      <div class="toy-logo">🧸 MUÑECO <span>PLAYTIME</span></div>
+      <div class="chapter">CAPÍTULO 1: «FÁBRICA ABANDONADA» — PORT PARA NAVEGADOR</div>
+      <p class="lore">Hace 10 años, todos los trabajadores de la fábrica de juguetes <b>Juguetes Sonrisa S.A.</b> desaparecieron sin dejar rastro. Esta noche has vuelto para descubrir la verdad. Encuentra el <b>GarraPack</b>, restaura la energía y sobrevive a <b>Mullido</b>.</p>
+      <p class="disclaimer">Fan-remake original sin assets oficiales. Inspirado en Poppy Playtime Ch.1. Todo el arte y audio son procedurales.</p>
+      <div class="controls-grid">
+        <div><b>WASD</b> moverse</div><div><b>Ratón</b> mirar (clic para capturar)</div>
+        <div><b>Click Izq / Der</b> disparar mano azul / roja</div><div><b>E</b> recoger / activar</div>
+        <div><b>Shift</b> correr</div><div><b>R</b> recoger manos</div>
+        <div><b>P / Esc</b> pausa</div><div><b>M</b> silencio</div>
+      </div>
+      <button id="btn-start" class="big-btn">▶ ENTRAR A LA FÁBRICA</button>
+      <button id="btn-how" class="ghost-btn">¿Cómo jugar?</button>
+      <div id="howto" class="hidden">
+        <ol>
+          <li>Explora el <b>lobby</b> y entra a la <b>tienda de regalos</b> (este) para recoger el <b>GarraPack</b>.</li>
+          <li>Usa una mano en el <b>pomo de la puerta de seguridad</b> (norte del lobby) para abrirla de un tirón.</li>
+          <li>En la <b>sala de energía</b> (oeste): dispara <b>ambas manos a las 2 torres eléctricas</b> a la vez durante 3 s.</li>
+          <li>Entra a la <b>sala de máquinas</b> (portón norte). Busca <b>2 piezas de juguete</b>, colócalas y tira de la palanca.</li>
+          <li>Cruza el <b>conducto</b> y <b>¡CORRE!</b> hasta la salida. Cierra la puerta con el GarraPack en la palanca de emergencia.</li>
+        </ol>
+      </div>
+      <div class="quality-row">
+        <label>Calidad: <select id="quality"><option value="high">Alta</option><option value="low">Baja (PC lento)</option></select></label>
+        <label><input type="checkbox" id="opt-flash" checked> Linterna</label>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pausa -->
+  <div id="menu-pause" class="screen hidden">
+    <div class="menu-card">
+      <h2>⏸ PAUSA</h2>
+      <p id="pause-stats"></p>
+      <button id="btn-resume" class="big-btn">Continuar</button>
+      <button id="btn-restart" class="ghost-btn">Reiniciar capítulo</button>
+    </div>
+  </div>
+
+  <!-- Game over -->
+  <div id="menu-dead" class="screen hidden">
+    <div class="menu-card danger">
+      <h2>💀 MULLIDO TE ATRAPÓ</h2>
+      <p id="dead-stats"></p>
+      <button id="btn-retry" class="big-btn">Reintentar</button>
+    </div>
+  </div>
+
+  <!-- Victoria -->
+  <div id="menu-win" class="screen hidden">
+    <div class="menu-card win">
+      <h2>🏆 ¡ESCAPASTE DEL CAPÍTULO 1!</h2>
+      <p id="win-stats"></p>
+      <p class="lore">Lograste encender la máquina «Crea-un-Amigo», cruzar el conducto y cerrar el portón en la cara de Mullido. Pero al fondo del pasillo… se escucha una caja musical. <i>Continuará…</i></p>
+      <button id="btn-again" class="big-btn">Jugar otra vez</button>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+  <div id="subtitle" class="hidden"></div>
+  <div id="jumpscare" class="hidden"><div id="jumpscare-face">👹</div><div id="jumpscare-text">¡MULLIDO!</div></div>
+  <div id="loading"><div class="spin">🧸</div><p>Cargando fábrica…</p></div>
+</div>
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js"}}</script>
+<script type="module" src="game.js"></script>
+</body>
+</html>

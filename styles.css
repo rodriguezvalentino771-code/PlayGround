@@ -1,0 +1,64 @@
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--blue:#29b6ff;--red:#ff3b5c;--yellow:#ffd23e;--bg:#0b0d16}
+html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);font-family:'Segoe UI',system-ui,Arial,sans-serif;color:#eef2ff;user-select:none}
+#app{position:fixed;inset:0}
+#game-canvas{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:crosshair}
+.hidden{display:none!important}
+/* HUD */
+#hud{position:absolute;inset:0;pointer-events:none;z-index:5}
+#crosshair{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%)}
+#crosshair .dot{width:6px;height:6px;background:#fff;border-radius:50%;margin:0 auto;box-shadow:0 0 6px #000}
+#crosshair .ring{width:26px;height:26px;border:2px solid rgba(255,255,255,.55);border-radius:50%;margin-top:4px;transition:transform .12s,border-color .12s}
+#crosshair.active .ring{transform:scale(1.35);border-color:var(--yellow)}
+#objective-panel{position:absolute;top:14px;left:14px;background:rgba(8,10,22,.78);border-left:4px solid var(--yellow);padding:10px 14px;border-radius:0 10px 10px 0;max-width:360px;backdrop-filter:blur(4px)}
+#objective-title{font-size:11px;letter-spacing:2px;color:var(--yellow);font-weight:800}
+#objective-text{font-size:15px;font-weight:700;margin-top:2px}
+#objective-sub{font-size:12px;color:#aab4d4;margin-top:2px}
+#hands-panel{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);display:flex;gap:12px}
+.hand{padding:8px 16px;border-radius:12px;font-size:12px;font-weight:700;background:rgba(8,10,22,.8);border:2px solid #333;min-width:170px;text-align:center}
+.hand .hand-state{display:block;font-size:11px;font-weight:400;opacity:.85;margin-top:2px}
+.hand.blue{border-color:var(--blue);box-shadow:0 0 12px rgba(41,182,255,.35)}
+.hand.red{border-color:var(--red);box-shadow:0 0 12px rgba(255,59,92,.35)}
+.hand.flying{animation:pulse .4s infinite alternate}
+@keyframes pulse{from{transform:scale(1)}to{transform:scale(1.06)}}
+#stats-panel{position:absolute;top:14px;right:14px;text-align:right;background:rgba(8,10,22,.78);padding:10px 14px;border-radius:10px}
+#timer{font-size:20px;font-weight:800;font-variant-numeric:tabular-nums}
+#tapes{font-size:13px;color:#cdd6ff}
+#interact-tip{margin-top:6px;background:var(--yellow);color:#111;font-weight:800;padding:4px 10px;border-radius:8px;animation:pulse .5s infinite alternate}
+#power-bar{position:absolute;bottom:16px;right:16px;width:180px;height:22px;background:#141828;border:1px solid #444;border-radius:11px;overflow:hidden}
+#power-fill{height:100%;width:0%;background:linear-gradient(90deg,#29b6ff,#7CFC00);transition:width .2s}
+#power-bar span{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;letter-spacing:1px}
+#damage-vignette{position:absolute;inset:0;box-shadow:inset 0 0 120px rgba(255,0,40,0);transition:box-shadow .2s}
+#chase-warning{position:absolute;top:18%;left:50%;transform:translateX(-50%);font-size:34px;font-weight:900;color:#ff3b5c;text-shadow:0 0 18px #ff0000,0 2px 0 #000;animation:blink .4s infinite alternate}
+@keyframes blink{from{opacity:1}to{opacity:.4}}
+/* Screens */
+.screen{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at center,rgba(20,16,40,.88),rgba(3,4,10,.96));z-index:20;padding:16px;overflow:auto}
+.menu-card{max-width:640px;width:100%;background:linear-gradient(180deg,#171a2e,#0e1020);border:1px solid #2c3358;border-radius:18px;padding:28px 30px;box-shadow:0 20px 60px rgba(0,0,0,.6);text-align:center}
+.menu-card.danger{border-color:var(--red)}
+.menu-card.win{border-color:#7CFC00}
+.toy-logo{font-size:42px;font-weight:900;letter-spacing:1px;color:#fff;text-shadow:0 3px 0 #c9184a,0 0 24px rgba(255,60,90,.5)}
+.toy-logo span{color:var(--blue)}
+.chapter{color:var(--yellow);font-weight:700;margin:6px 0 12px;font-size:14px;letter-spacing:1px}
+.lore{font-size:14px;line-height:1.5;color:#c9d2f2;margin-bottom:10px}
+.disclaimer{font-size:11px;color:#7d87ad;margin-bottom:14px}
+.controls-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:12px;background:#0a0c1a;padding:12px;border-radius:10px;margin-bottom:14px;text-align:left}
+.controls-grid b{color:var(--yellow)}
+.big-btn{pointer-events:auto;display:block;width:100%;padding:14px;font-size:18px;font-weight:900;border:none;border-radius:12px;background:linear-gradient(90deg,#ff3b5c,#ff8a3d);color:#fff;cursor:pointer;margin-top:8px;box-shadow:0 6px 20px rgba(255,60,90,.4)}
+.big-btn:hover{filter:brightness(1.12);transform:translateY(-1px)}
+.ghost-btn{display:block;width:100%;padding:10px;margin-top:8px;background:transparent;border:1px solid #4a5480;color:#cdd6ff;border-radius:12px;cursor:pointer;pointer-events:auto}
+.ghost-btn:hover{background:#222748}
+#howto{text-align:left;font-size:13px;background:#0a0c1a;border-radius:10px;padding:12px 18px;margin-top:10px;line-height:1.6}
+#howto li{margin-bottom:4px}
+.quality-row{display:flex;gap:16px;justify-content:center;margin-top:12px;font-size:13px;color:#aab4d4}
+.quality-row select{background:#0a0c1a;color:#fff;border:1px solid #444;border-radius:6px;padding:4px}
+/* toast + subtitle */
+#toast{position:absolute;bottom:90px;left:50%;transform:translateX(-50%);background:rgba(10,12,26,.92);border:1px solid var(--yellow);padding:10px 18px;border-radius:12px;font-size:14px;font-weight:700;z-index:15;max-width:80%;text-align:center}
+#subtitle{position:absolute;bottom:140px;left:50%;transform:translateX(-50%);font-size:17px;font-style:italic;color:#ffe9a8;text-shadow:0 2px 4px #000;z-index:15;max-width:80%;text-align:center}
+#jumpscare{position:absolute;inset:0;background:#000;z-index:50;display:flex;flex-direction:column;align-items:center;justify-content:center}
+#jumpscare-face{font-size:min(46vw,340px);animation:shake .08s infinite}
+#jumpscare-text{font-size:48px;font-weight:900;color:#ff0000}
+@keyframes shake{0%{transform:translate(0,0) scale(1)}25%{transform:translate(-14px,8px) scale(1.08)}50%{transform:translate(12px,-10px) scale(1.12)}75%{transform:translate(-8px,-6px) scale(1.05)}100%{transform:translate(6px,6px) scale(1.1)}}
+#loading{position:absolute;inset:0;background:var(--bg);z-index:100;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px}
+#loading .spin{font-size:64px;animation:spinb 1.2s infinite}
+@keyframes spinb{0%{transform:rotate(-12deg) scale(1)}50%{transform:rotate(12deg) scale(1.15)}100%{transform:rotate(-12deg) scale(1)}}
+@media (max-width:700px){.toy-logo{font-size:30px}.controls-grid{grid-template-columns:1fr}#objective-panel{max-width:250px}}
